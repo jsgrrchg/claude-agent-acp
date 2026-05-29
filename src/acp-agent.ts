@@ -347,11 +347,116 @@ const LOCAL_ONLY_COMMANDS = new Set(["/context", "/heapdump", "/extra-usage"]);
 // payload in these XML-like markers that the CLI uses for its own display.
 // The live prompt loop drops them; replay must strip them too or they leak
 // into the UI on session/load.
-const LOCAL_COMMAND_TAG_PATTERN =
-  /<(command-name|command-message|command-args|local-command-stdout|local-command-stderr)>[\s\S]*?<\/\1>/g;
+const LOCAL_COMMAND_TAGS = [
+  "command-name",
+  "command-message",
+  "command-args",
+  "local-command-stdout",
+  "local-command-stderr",
+] as const;
+
+type LocalCommandTag = (typeof LOCAL_COMMAND_TAGS)[number];
+type LocalCommandTagToken = {
+  marker: string;
+  tag: LocalCommandTag;
+  closing: boolean;
+};
+type LocalCommandTagPositions = {
+  openings: number[];
+  openingHead: number;
+  closings: number[];
+  closingHead: number;
+};
+
+const LOCAL_COMMAND_TAG_TOKENS: LocalCommandTagToken[] = LOCAL_COMMAND_TAGS.flatMap((tag) => [
+  { marker: `<${tag}>`, tag, closing: false },
+  { marker: `</${tag}>`, tag, closing: true },
+]);
+
+function readLocalCommandTagToken(text: string, index: number): LocalCommandTagToken | null {
+  for (const token of LOCAL_COMMAND_TAG_TOKENS) {
+    if (text.startsWith(token.marker, index)) return token;
+  }
+  return null;
+}
 
 function stripMarkerTags(text: string): string {
-  return text.replace(LOCAL_COMMAND_TAG_PATTERN, "");
+  const tagPositions = new Map<LocalCommandTag, LocalCommandTagPositions>();
+  let index = 0;
+
+  while (index < text.length) {
+    const markerStart = text.indexOf("<", index);
+    if (markerStart === -1) break;
+
+    const token = readLocalCommandTagToken(text, markerStart);
+    if (token) {
+      let positions = tagPositions.get(token.tag);
+      if (!positions) {
+        positions = { openings: [], openingHead: 0, closings: [], closingHead: 0 };
+        tagPositions.set(token.tag, positions);
+      }
+
+      if (token.closing) {
+        positions.closings.push(markerStart);
+      } else {
+        positions.openings.push(markerStart);
+      }
+    }
+
+    index = markerStart + (token?.marker.length ?? 1);
+  }
+
+  let stripped = "";
+  let keptStart = 0;
+  index = 0;
+
+  while (index < text.length) {
+    const markerStart = text.indexOf("<", index);
+    if (markerStart === -1) break;
+
+    const token = readLocalCommandTagToken(text, markerStart);
+    if (!token || token.closing) {
+      index = markerStart + 1;
+      continue;
+    }
+
+    const positions = tagPositions.get(token.tag);
+    if (!positions) {
+      index = markerStart + token.marker.length;
+      continue;
+    }
+
+    while (
+      positions.openingHead < positions.openings.length &&
+      positions.openings[positions.openingHead] <= markerStart
+    ) {
+      positions.openingHead++;
+    }
+    while (
+      positions.closingHead < positions.closings.length &&
+      positions.closings[positions.closingHead] < markerStart + token.marker.length
+    ) {
+      positions.closingHead++;
+    }
+
+    const closingStart = positions.closings[positions.closingHead];
+    const nextOpeningStart = positions.openings[positions.openingHead];
+    if (
+      closingStart === undefined ||
+      (nextOpeningStart !== undefined && nextOpeningStart < closingStart)
+    ) {
+      index = markerStart + token.marker.length;
+      continue;
+    }
+
+    positions.closingHead++;
+    stripped += text.slice(keptStart, markerStart);
+    index = closingStart + `</${token.tag}>`.length;
+    keptStart = index;
+  }
+
+  if (keptStart === 0) return text;
+  return stripped + text.slice(keptStart);
 }
 
 /**

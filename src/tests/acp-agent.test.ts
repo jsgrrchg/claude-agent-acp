@@ -1156,6 +1156,39 @@ describe("stripLocalCommandMetadata", () => {
     );
   });
 
+  it("preserves unknown and incomplete marker-like tags", () => {
+    expect(stripLocalCommandMetadata("<command-name>/model")).toBe("<command-name>/model");
+    expect(stripLocalCommandMetadata("<command-name>/model</command-message>")).toBe(
+      "<command-name>/model</command-message>",
+    );
+    expect(stripLocalCommandMetadata("<unknown-command>hi</unknown-command>")).toBe(
+      "<unknown-command>hi</unknown-command>",
+    );
+  });
+
+  it("handles long adversarial marker-like input without dropping text", () => {
+    const adversarial = Array.from(
+      { length: 5_000 },
+      (_, index) => `<command-name>${index}</command-message>`,
+    ).join("");
+
+    expect(stripLocalCommandMetadata(adversarial)).toBe(adversarial);
+  });
+
+  it("preserves prose around crossed marker-like tags", () => {
+    expect(
+      stripLocalCommandMetadata(
+        "<command-name><command-message></command-name>hi</command-message>",
+      ),
+    ).toBe("hi</command-message>");
+  });
+
+  it("does not pair an incomplete opening tag with a later valid block", () => {
+    expect(
+      stripLocalCommandMetadata("<command-name>/model hi <command-name>/x</command-name> tail"),
+    ).toBe("<command-name>/model hi  tail");
+  });
+
   // Regression: in the original bug report the entire /model preamble and
   // the user's real "hi" prompt were concatenated into a single message.
   // We want to strip the marker tags and preserve the real prose, not drop
