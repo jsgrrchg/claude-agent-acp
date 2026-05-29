@@ -1175,6 +1175,12 @@ describe("stripLocalCommandMetadata", () => {
     expect(stripLocalCommandMetadata(adversarial)).toBe(adversarial);
   });
 
+  it("preserves many unterminated marker fragments", () => {
+    const markerLikeNoise = "<command-args".repeat(5_000);
+
+    expect(stripLocalCommandMetadata(`${markerLikeNoise}hi`)).toBe(`${markerLikeNoise}hi`);
+  });
+
   it("preserves prose around crossed marker-like tags", () => {
     expect(
       stripLocalCommandMetadata(
